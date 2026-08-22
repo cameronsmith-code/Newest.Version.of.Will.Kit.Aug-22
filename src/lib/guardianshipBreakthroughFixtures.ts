@@ -1,0 +1,147 @@
+import type { GuardianshipRoadmapModel } from './guardianshipRoadmapTypes';
+
+export function buildBreakthroughFamilyModel(): GuardianshipRoadmapModel {
+  return {
+    family: {
+      clientNames: ['John', 'Jane'],
+      provinceOfResidence: 'Ontario',
+      ageOfMajority: 18,
+    },
+    children: [
+      {
+        childId: 'child_abby',
+        name: 'Abigail Smith',
+        nickname: 'Abby',
+        status: 'minor',
+        age: 9,
+        planningFocus: 'Minor — ongoing support needs',
+        educationTransition: {
+          schoolName: 'Brightpath Therapeutic Academy',
+          hasIEP: true,
+          iepDetails: 'IEP includes sensory breaks, modified curriculum, and 1:1 EA support for 60% of the day',
+          settingType: 'specialized_therapeutic',
+          settingReasons: ['disability_support', 'specialized_programming', 'smaller_class'],
+          educationImportance: 'essential_support',
+          settingReasonsNotes: 'Abby needs the smaller class sizes and sensory-aware environment. A regular classroom would be overwhelming for her.',
+        },
+        futureEducation: {
+          aspirations: ['adapted_education', 'whatever_suits'],
+          aspirationNotes: 'We want Abby to have every opportunity, but we also want to follow her lead. Her path may look different from a typical journey and that is okay.',
+          supportExpectation: 'likely',
+        },
+        educationFairness: {
+          principles: ['preserve_if_need_based', 'guardian_trustee_discussion'],
+        },
+        importantConnections: [
+          { name: 'Ms. Chen', relationshipTypes: ['teacher'], contexts: ['school'], importance: 'especially_important', whyItMatters: 'Ms. Chen understands Abby better than anyone outside the family.', continuityIdeas: [] },
+        ],
+        inheritanceByClient: [],
+        activities: [],
+        communities: [],
+        traditions: [],
+        healthcareTransition: { providers: [], hasMedications: false, medications: [], hasAllergies: false, allergies: [] },
+        supportTransition: [],
+      },
+      {
+        childId: 'child_linda',
+        name: 'Linda Smith',
+        nickname: 'Linda',
+        status: 'minor',
+        age: 12,
+        planningFocus: 'Minor',
+        educationTransition: {
+          schoolName: 'Riverview Preparatory',
+          hasIEP: false,
+          settingType: 'private',
+          settingReasons: ['academic_preference', 'family_preference'],
+          educationImportance: 'strong_preference',
+          settingReasonsNotes: 'We chose Riverview for the academic rigor and the community. We would love this to continue if possible.',
+        },
+        futureEducation: {
+          aspirations: ['university', 'college'],
+          aspirationNotes: 'We hope Linda will have the option of university, but we also want her to find her own path.',
+          supportExpectation: 'yes',
+        },
+        educationFairness: {
+          principles: ['preserve_if_resources_allow', 'balance_with_guardian_family', 'guardian_discretion'],
+        },
+        importantConnections: [
+          { name: 'Sarah', relationshipTypes: ['best_friend'], contexts: ['school'], importance: 'especially_important', whyItMatters: 'Sarah and Linda have been inseparable since kindergarten.', continuityIdeas: [] },
+        ],
+        inheritanceByClient: [],
+        activities: [],
+        communities: [],
+        traditions: [],
+        healthcareTransition: { providers: [], hasMedications: false, medications: [], hasAllergies: false, allergies: [] },
+        supportTransition: [],
+      },
+    ],
+    guardianAssignments: [
+      {
+        childIds: ['child_abby', 'child_linda'],
+        childNames: ['Abby', 'Linda'],
+        guardianPeople: [{ name: 'Ronny Carter', personId: 'person_ronny' }],
+        guardianPersonIds: ['person_ronny'],
+        alternatePeople: [],
+        alternatePersonIds: [],
+        isHousehold: false,
+        householdLabel: 'Ronny',
+        guardianPeopleIds: ['person_ronny'],
+        spokenWith: 'yes_not_confirmed',
+        inWill: 'yes',
+        moveStatus: 'likely',
+        guardianCommunity: "Ronny's home in Ottawa",
+        isCrossProvince: false,
+        isCrossBorder: false,
+      },
+    ],
+    guardianTrust: {
+      selectionReason: 'We chose Ronny because he has always been the person our kids run to. He is patient, warm, and completely himself. He makes them laugh in a way nobody else can. We trust his instincts as a parent and as a person. His own children are kind and grounded, and that tells us everything about the home he has built.',
+      trustMessage: 'We are not asking you to be us. We are asking you to be you — the person we trust completely. Make the calls you think are right. We will not be here to second-guess, and we would not want to even if we could.',
+      ifNeededMessage: 'If this day ever comes, please know that we chose you with our whole hearts. You do not have to be perfect. You just have to be Ronny. That is more than enough.',
+    },
+    guardianDiscretion: {
+      trustedDecisions: 'We trust Ronny to make decisions about schooling, activities, daily routines, and discipline. If something we have written here no longer makes sense for his family or for our kids, we want him to change it. We would rather he adapt than try to follow a plan that no longer fits.',
+      especiallyImportantWishes: 'The one thing that matters most to us is that Abby continues to receive the level of educational support she needs. Everything else is a preference. That is a need.',
+    },
+    familyFairness: {
+      principles: [
+        'preserve_important_opportunities',
+        'prioritize_need_based',
+        'consider_whole_household',
+        'guardian_flexibility',
+        'discuss_significant_differences',
+      ],
+    },
+    adultSiblingRoles: [
+      {
+        adultSiblingName: 'JD',
+        forMinorChildNames: ['Abby', 'Linda'],
+        role: 'maintain_connection',
+        notResponsibleFor: ['daily_care', 'financial_support', 'guardianship_decisions'],
+      },
+    ],
+    roles: [],
+    financialResources: [],
+    fundingPhilosophy: {
+      ordinaryExpensesApproach: 'ordinary_covered',
+      largerHome: 'yes_reasonable',
+      largerVehicle: 'yes_reasonable',
+      childcare: 'yes_reasonable',
+      householdHelp: 'yes_reasonable',
+      reducedWork: 'yes_reasonable',
+      sharedBenefitPhilosophy: 'reasonable_shared',
+      guardianOwnChildrenFairnessNotes: 'We do not want our children\'s resources to create awkwardness. We trust Ronny to spend in ways that help the whole household function.',
+    },
+    readiness: {
+      decisionsMade: ['Guardian selected: Ronny Carter', 'Funding philosophy discussed'],
+      thingsWorthConfirming: ['Confirm Ronny is named in Will', 'Review trust terms for education funding'],
+      thingsStillToDo: ['Have detailed conversation with Ronny', 'Update Will if needed'],
+    },
+    documents: [],
+    immediateActions: [],
+    estateTrustees: [],
+    careFundingCoordination: [],
+    fundingReviewItems: [],
+  } as unknown as GuardianshipRoadmapModel;
+}

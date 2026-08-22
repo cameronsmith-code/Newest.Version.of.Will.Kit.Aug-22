@@ -1,0 +1,57 @@
+# WILL COMPANION KIT — PERMANENT ENGINEERING PRINCIPLES
+
+## BASELINE V2 PRINCIPLE
+
+The existing question set, branch logic, repeatable records, relationship capture, and downstream mappings are functional requirements unless explicitly approved for removal. Presentation may change. Functionality may not silently disappear.
+
+## 2A. FACTS PERSIST. OUTPUTS DERIVE.
+
+Changing a gateway, branch, or UI visibility must not automatically destroy valuable structured facts (People, Children, Trusts, Corporations, Policies, Accounts, Properties, Professionals, document locations, completed Will/POA information). Branch visibility determines whether information is currently presented — it does not authorize deletion.
+
+## 2B. NO IS A FACT. UNANSWERED IS DIFFERENT.
+
+Never treat undefined/blank/unanswered as equivalent to No. "I'm not sure" is a legitimate answer and must not be converted into missing or No.
+
+## 2C. UNKNOWN IS NOT MISSING.
+
+If a client explicitly indicates they do not know something: preserve that uncertainty. Do not convert into blank/missing/zero/No.
+
+## 2D. UNASKED IS NOT MISSING.
+
+If the questionnaire never fairly presented a question: do not flag the client for failing to answer it.
+
+## 2E. CREATE WHERE NEEDED. STORE WHERE IT BELONGS.
+
+A Person entered while answering any domain question should be stored in the correct canonical repository. Relationships belong to the domain; the Person belongs in the People model. Same for Entities, Professionals, Documents, Properties, Accounts.
+
+## 2F. CURRENT CANONICAL SOURCE FIRST.
+
+Use current canonical/structured source first. Legacy flat fields are migration/fallback only. Do not create new features depending primarily on legacy flat fields where a current model exists.
+
+## 2G. DO NOT CREATE PARALLEL DOMAIN ARCHITECTURES.
+
+Do not introduce a second independent model for People, Trusts, Corporations, Investments, Properties, Documents, Professionals, Insurance, or Debts without an explicit migration plan (OLD SOURCE, NEW SOURCE, MIGRATION, CUTOVER, RETIREMENT).
+
+## 2H. UX CHANGES MUST PRESERVE THE QUESTION CONTRACT.
+
+Before redesigning a section: inventory its questions, branches, repeated entities, relationships, validation, downstream mappings. After redesign: every approved capability must remain reachable. A visual redesign may change layout/wording/grouping/progressive disclosure but may NOT silently remove functionality.
+
+## 2I. ONE DOMAIN AT A TIME.
+
+Do not "modernize the entire questionnaire" or "apply this UX across the whole app." Modernize one section, verify it, commit it, then continue.
+
+## 2J. NO NEW `@ts-nocheck` IN PRODUCTION CODE.
+
+This baseline has no production `@ts-nocheck`. Preserve that. If TypeScript reports an error: fix the error. Do not silence an entire production file. `@ts-ignore` must not be used as a default workaround.
+
+## 2K. NO GIANT NEW LOGIC IN STEPFROM.
+
+StepForm is already extremely large. Do NOT add substantial new domain functionality directly into StepForm. When a domain is later modernized: extract it deliberately into a dedicated component while preserving the complete functional contract.
+
+## QUESTION CONTRACT RULE
+
+Before a future UX migration can be declared successful:
+- BEFORE: existing functional contract is captured.
+- AFTER: every approved capability must be RENDERED, REACHABLE, EDITABLE, PERSISTENT, and MAPPED TO THE SAME OR APPROVED NEW CANONICAL FACT.
+
+A component existing in source code is NOT sufficient. Reachability from the actual questionnaire flow is required.

@@ -1,0 +1,288 @@
+/**
+ * Real Estate Obligation Sync Hook — watches primaryHomeData and propertiesData
+ * from the Real Estate section and syncs mortgages/HELOCs to the unified
+ * Obligation architecture.
+ *
+ * Each mortgage or HELOC creates/reuses one canonical Obligation entity with:
+ * - borrower_of relationships for each responsible party
+ * - lender_of relationship for the lender
+ * - secured_by relationship to the property entity (using propertyEntityId)
+ *
+ * For HELOCs, creditLimit and outstanding balance are both stored.
+ * Household debt totals use the outstanding balance, not the credit limit.
+ */
+
+import { useEffect, useCallback, useRef, useMemo } from 'react';
+import { useEntityRegistry } from '../context/EntityRegistryContext';
+import { usePeopleRepository } from '../context/PeopleRepositoryContext';
+import { syncObligation, deleteObligation, type ObligationInput, type ObligationStore } from './obligationSync';
+
+type PropertyData = {
+  name?: string;
+  propertyEntityId?: string;
+  hasDebt?: string;
+  debtType?: string;
+  mortgageLender?: string;
+  mortgageBalance?: string;
+  mortgageResponsibleParties?: string[];
+  mortgageOtherBorrowers?: Array<{ name?: string }>;
+  mortgageInterestRate?: string;
+  mortgageInterestRateType?: string;
+  mortgagePayment?: string;
+  mortgagePaymentFrequency?: string;
+  mortgageDocLocation?: string;
+  mortgageSpecialNotes?: string;
+  mortgageEntityId?: string;
+  helocLender?: string;
+  helocBalance?: string;
+  helocCreditLimit?: string;
+  helocResponsibleParties?: string[];
+  helocOtherBorrowers?: Array<{ name?: string }>;
+  helocInterestRate?: string;
+  helocPaymentSource?: string;
+  helocDocLocation?: string;
+  helocSpecialNotes?: string;
+  helocEntityId?: string;
+};
+
+type RealEstateObligationSyncArgs = {
+  primaryHomeData: PropertyData;
+  propertiesData: PropertyData[];
+  client1Name: string;
+  client2Name: string;
+  client1EntityId: string;
+  client2EntityId: string;
+  hasSpouse: boolean;
+  onUpdateField: (field: string, value: unknown) => void;
+  onUpdateProperty: (index: number, updates: Record<string, unknown>) => void;
+};
+
+export function useRealEstateObligationSync({
+  primaryHomeData,
+  propertiesData,
+  client1Name,
+  client2Name,
+  client1EntityId,
+  client2EntityId,
+  hasSpouse: _hasSpouse,
+  onUpdateField,
+  onUpdateProperty,
+}: RealEstateObligationSyncArgs) {
+  const registry = useEntityRegistry();
+  const peopleRepo = usePeopleRepository();
+
+  const genRef = useRef(0);
+
+  const store: ObligationStore = useMemo(() => ({
+    getOrCreateEntity: registry.getOrCreateEntity,
+    updateEntity: registry.updateEntity,
+    createRelationship: registry.createRelationship,
+    removeRelationship: registry.removeRelationship,
+    getRelationshipsByTarget: registry.getRelationshipsByTarget,
+    getRelationshipsBySource: registry.getRelationshipsBySource,
+    getRelationshipsByEntity: registry.getRelationshipsByEntity,
+  }), [
+    registry.getOrCreateEntity,
+    registry.updateEntity,
+    registry.createRelationship,
+    registry.removeRelationship,
+    registry.getRelationshipsByTarget,
+    registry.getRelationshipsBySource,
+    registry.getRelationshipsByEntity,
+  ]);
+
+  const resolveClientEntity = useCallback(
+    (label: string): { entityId: string; entityType: 'person'; displayName: string } | null => {
+      if (label === 'client1' && client1EntityId) return { entityId: client1EntityId, entityType: 'person' as const, displayName: client1Name || 'Client 1' };
+      if (label === 'client2' && client2EntityId) return { entityId: client2EntityId, entityType: 'person' as const, displayName: client2Name || 'Client 2' };
+      return null;
+    },
+    [client1EntityId, client1Name, client2EntityId, client2Name]
+  );
+
+  const resolveOtherPersonEntity = useCallback(
+    async (name: string): Promise<{ entityId: string; entityType: 'person'; displayName: string } | null> => {
+      if (!name.trim()) return null;
+      const person = await peopleRepo.getOrCreatePerson(name);
+      const result = await store.getOrCreateEntity(name, 'person', {
+        sourceSection: 'realEstate',
+        completionStatus: 'identified',
+        metadata: person?.id ? { personRepoId: person.id } : undefined,
+      });
+      return { entityId: result.entity.id, entityType: 'person' as const, displayName: name };
+    },
+    [peopleRepo, store]
+  );
+
+  const syncPropertyDebt = useCallback(
+    async (
+      property: PropertyData,
+      isPrimary: boolean,
+      index: number
+    ) => {
+      if (!property.hasDebt || property.hasDebt !== 'yes') return;
+      if (!property.propertyEntityId) return;
+
+      const propertyName = property.name || (isPrimary ? 'Primary Home' : `Property ${index + 1}`);
+      const debtType = property.debtType || '';
+
+      // Sync mortgage
+      if (debtType === 'mortgage' || debtType === 'both') {
+        const lenderName = property.mortgageLender?.trim() || 'Unknown Lender';
+        const lenderResult = await store.getOrCreateEntity(lenderName, 'lender', {
+          sourceSection: 'realEstate',
+          completionStatus: 'identified',
+        });
+
+        const parties = property.mortgageResponsibleParties || [];
+        const mortgageBorrowers: Array<{ entityId: string; entityType: 'person'; displayName: string }> = [];
+
+        for (const partyLabel of parties) {
+          if (partyLabel === 'client1' || partyLabel === 'client2') {
+            const info = resolveClientEntity(partyLabel);
+            if (info) mortgageBorrowers.push(info);
+          } else if (partyLabel === 'other') {
+            const otherBorrowers = property.mortgageOtherBorrowers || [];
+            for (const ob of otherBorrowers) {
+              if (ob?.name?.trim()) {
+                const info = await resolveOtherPersonEntity(ob.name);
+                if (info) mortgageBorrowers.push(info);
+              }
+            }
+          }
+        }
+        if (mortgageBorrowers.length === 0) {
+          const fallback = resolveClientEntity('client1');
+          if (fallback) mortgageBorrowers.push(fallback);
+        }
+        if (mortgageBorrowers.length === 0) return;
+
+        const input: ObligationInput = {
+          obligationEntityId: property.mortgageEntityId,
+          obligationType: 'mortgage',
+          direction: 'person_owes',
+          borrower: { entityId: mortgageBorrowers[0].entityId, entityType: 'person', displayName: mortgageBorrowers[0].displayName },
+          borrowers: mortgageBorrowers,
+          lender: { entityId: lenderResult.entity.id, entityType: 'lender', displayName: lenderName },
+          amount: property.mortgageBalance,
+          interestRate: property.mortgageInterestRate,
+          secured: 'yes',
+          collateralEntityId: property.propertyEntityId,
+          collateralDescription: propertyName,
+          guarantors: [],
+          notes: property.mortgageSpecialNotes,
+          paymentAmount: property.mortgagePayment,
+          paymentFrequency: property.mortgagePaymentFrequency,
+          sourceSection: 'realEstate',
+          sourceRecordId: isPrimary ? 'primary_mortgage' : `prop_${index}_mortgage`,
+        };
+
+        const syncGen = genRef.current;
+        await syncObligation(input, store, (id) => {
+          if (syncGen !== genRef.current) return;
+          if (isPrimary) {
+            if (primaryHomeData.mortgageEntityId !== id) {
+              onUpdateField('mortgageEntityId', id);
+            }
+          } else {
+            if (propertiesData[index]?.mortgageEntityId !== id) {
+              onUpdateProperty(index, { mortgageEntityId: id });
+            }
+          }
+        });
+
+
+      }
+
+      // Sync HELOC
+      if (debtType === 'heloc' || debtType === 'both') {
+        const lenderName = property.helocLender?.trim() || 'Unknown Lender';
+        const lenderResult = await store.getOrCreateEntity(lenderName, 'lender', {
+          sourceSection: 'realEstate',
+          completionStatus: 'identified',
+        });
+
+        const parties = property.helocResponsibleParties || [];
+        const helocBorrowers: Array<{ entityId: string; entityType: 'person'; displayName: string }> = [];
+
+        for (const partyLabel of parties) {
+          if (partyLabel === 'client1' || partyLabel === 'client2') {
+            const info = resolveClientEntity(partyLabel);
+            if (info) helocBorrowers.push(info);
+          } else if (partyLabel === 'other') {
+            const otherBorrowers = property.helocOtherBorrowers || [];
+            for (const ob of otherBorrowers) {
+              if (ob?.name?.trim()) {
+                const info = await resolveOtherPersonEntity(ob.name);
+                if (info) helocBorrowers.push(info);
+              }
+            }
+          }
+        }
+        if (helocBorrowers.length === 0) {
+          const fallback = resolveClientEntity('client1');
+          if (fallback) helocBorrowers.push(fallback);
+        }
+        if (helocBorrowers.length === 0) return;
+
+        const input: ObligationInput = {
+          obligationEntityId: property.helocEntityId,
+          obligationType: 'heloc',
+          direction: 'person_owes',
+          borrower: { entityId: helocBorrowers[0].entityId, entityType: 'person', displayName: helocBorrowers[0].displayName },
+          borrowers: helocBorrowers,
+          lender: { entityId: lenderResult.entity.id, entityType: 'lender', displayName: lenderName },
+          amount: property.helocBalance,
+          creditLimit: property.helocCreditLimit,
+          secured: 'yes',
+          collateralEntityId: property.propertyEntityId,
+          collateralDescription: propertyName,
+          guarantors: [],
+          notes: property.helocSpecialNotes,
+          sourceSection: 'realEstate',
+          sourceRecordId: isPrimary ? 'primary_heloc' : `prop_${index}_heloc`,
+        };
+
+        const syncGen = genRef.current;
+        await syncObligation(input, store, (id) => {
+          if (syncGen !== genRef.current) return;
+          if (isPrimary) {
+            if (primaryHomeData.helocEntityId !== id) {
+              onUpdateField('helocEntityId', id);
+            }
+          } else {
+            if (propertiesData[index]?.helocEntityId !== id) {
+              onUpdateProperty(index, { helocEntityId: id });
+            }
+          }
+        });
+
+
+      }
+    },
+    [store, resolveClientEntity, resolveOtherPersonEntity, onUpdateField, onUpdateProperty, primaryHomeData, propertiesData]
+  );
+
+  useEffect(() => {
+    genRef.current++;
+    const syncGen = genRef.current;
+    const syncAll = async () => {
+      await syncPropertyDebt(primaryHomeData, true, 0);
+      if (syncGen !== genRef.current) return;
+      for (let i = 0; i < propertiesData.length; i++) {
+        if (syncGen !== genRef.current) return;
+        await syncPropertyDebt(propertiesData[i], false, i);
+      }
+    };
+    syncAll();
+  }, [primaryHomeData, propertiesData, syncPropertyDebt]);
+
+  const removeObligation = useCallback(
+    async (obligationEntityId: string | undefined) => {
+      await deleteObligation(obligationEntityId, store);
+    },
+    [store]
+  );
+
+  return { removeObligation };
+}
