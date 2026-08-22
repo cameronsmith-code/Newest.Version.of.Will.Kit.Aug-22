@@ -38,11 +38,11 @@ Before redesigning a section: inventory its questions, branches, repeated entiti
 
 ## 2I. ONE DOMAIN AT A TIME.
 
-Do not "modernize the entire questionnaire" or "apply this UX across the whole app." Modernize one section, verify it, commit it, then continue.
+Do not "modernize the entire questionnaire\" or "apply this UX across the whole app.\" Modernize one section, verify it, commit it, then continue.
 
-## 2J. NO NEW `@ts-nocheck` IN PRODUCTION CODE.
+## 2J. NO NEW `@ts-nocheck\` IN PRODUCTION CODE.
 
-This baseline has no production `@ts-nocheck`. Preserve that. If TypeScript reports an error: fix the error. Do not silence an entire production file. `@ts-ignore` must not be used as a default workaround.
+This baseline has no production `@ts-nocheck`. Preserve that. If TypeScript reports an error: fix the error. Do not silence an entire production file. `@ts-ignore\` must not be used as a default workaround.
 
 ## 2K. NO GIANT NEW LOGIC IN STEPFROM.
 
