@@ -2,20 +2,19 @@
  * Corporate Obligation Sync Hook — watches the 5 corporate debt data arrays
  * and syncs them to the unified Obligation architecture via obligationSync.
  *
- * Freeze-gate fixes:
- * - Person identity is ID-authoritative: client1/client2 resolve to stable
- *   person/entity IDs created during the About You step, not by name matching.
- * - Guarantees link to a specific obligation by exact obligationEntityId,
- *   selected by the user from existing obligations for the corporation.
- *   Borrower+lender matching is no longer used for new records.
- * - "Another borrowing not listed" creates one new underlying obligation.
- * - "I'm not sure" preserves guarantee info without guessing the obligation.
+ * Closure Gate fixes:
+ * - `enabled` parameter: hook stays mounted but performs no work when disabled.
+ * - Stable callback refs: onUpdateArray stored in ref.
+ * - Source-signature-driven effect.
+ * - getEntityById added to store.
+ * - `registry.entities` access replaced with `store.getEntityById`.
+ * - All syncObligation callbacks now check `syncGen !== genRef.current`.
  */
 
 import { useEffect, useCallback, useMemo, useRef } from 'react';
 import { useEntityRegistry } from '../context/EntityRegistryContext';
 import { usePeopleRepository } from '../context/PeopleRepositoryContext';
-import { syncObligation, deleteObligation, type ObligationInput, type ObligationStore, type ObligationType } from './obligationSync';
+import { syncObligation, deleteObligation, normalizeObligationSource, type ObligationInput, type ObligationStore, type ObligationType } from './obligationSync';
 import type { ShareholderLoanData } from '../components/ShareholderLoanDetails';
 import type { CompanyOwedData } from '../components/CompanyOwedDetails';
 import type { IntercompanyLoanData } from '../components/IntercompanyLoanDetails';
@@ -24,6 +23,7 @@ import type { PersonalGuaranteeData } from '../components/PersonalGuaranteeDetai
 import type { DocumentLocationRef } from './documentLocationTypes';
 
 type CorporateObligationSyncArgs = {
+  enabled: boolean;
   shareholderLoans: ShareholderLoanData[];
   companyOwed: CompanyOwedData[];
   intercompanyLoans: IntercompanyLoanData[];
@@ -67,6 +67,7 @@ function resolveDocLocationRef(value: unknown): { label?: string; id?: string } 
 }
 
 export function useCorporateObligationSync({
+  enabled,
   shareholderLoans,
   companyOwed,
   intercompanyLoans,
@@ -93,6 +94,7 @@ export function useCorporateObligationSync({
     getRelationshipsByTarget: registry.getRelationshipsByTarget,
     getRelationshipsBySource: registry.getRelationshipsBySource,
     getRelationshipsByEntity: registry.getRelationshipsByEntity,
+    getEntityById: registry.getEntityById,
   }), [
     registry.getOrCreateEntity,
     registry.updateEntity,
@@ -101,37 +103,47 @@ export function useCorporateObligationSync({
     registry.getRelationshipsByTarget,
     registry.getRelationshipsBySource,
     registry.getRelationshipsByEntity,
+    registry.getEntityById,
   ]);
   const genRef = useRef(0);
+  const enabledRef = useRef(enabled);
+  enabledRef.current = enabled;
+
+  // Stable ref for callback
+  const onUpdateArrayRef = useRef(onUpdateArray);
+  onUpdateArrayRef.current = onUpdateArray;
+
+  // Stable refs for source data
+  const shareholderLoansRef = useRef(shareholderLoans);
+  shareholderLoansRef.current = shareholderLoans;
+  const companyOwedRef = useRef(companyOwed);
+  companyOwedRef.current = companyOwed;
+  const intercompanyLoansRef = useRef(intercompanyLoans);
+  intercompanyLoansRef.current = intercompanyLoans;
+  const relatedPartyLoansRef = useRef(relatedPartyLoans);
+  relatedPartyLoansRef.current = relatedPartyLoans;
+  const personalGuaranteesRef = useRef(personalGuarantees);
+  personalGuaranteesRef.current = personalGuarantees;
 
   const updateEntry = useCallback(
     (arrayKey: string, index: number, updates: Record<string, unknown>, current: SyncableEntry[]) => {
       const updated = [...current];
       if (updated[index]) {
         updated[index] = { ...updated[index], ...updates };
-        onUpdateArray(arrayKey, updated);
+        onUpdateArrayRef.current(arrayKey, updated);
       }
     },
-    [onUpdateArray]
+    []
   );
 
-  /**
-   * Resolve a client label to a canonical person entity using stable IDs.
-   * Priority: existing canonical entity ID > name-based fallback (migration only).
-   * For non-client persons (other guarantors, etc.), name-based creation is used
-   * since they have no pre-assigned stable ID.
-   */
   const resolveClientEntity = useCallback(
     (label: string): { entityId: string; displayName: string } | null => {
       if (label === 'client1') {
         if (client1EntityId) return { entityId: client1EntityId, displayName: client1Name || 'Client 1' };
-        if (!client1Name.trim()) return null;
-        // Migration fallback: no stable ID yet, resolve by name
         return null;
       }
       if (label === 'client2') {
         if (client2EntityId) return { entityId: client2EntityId, displayName: client2Name || 'Client 2' };
-        if (!client2Name.trim()) return null;
         return null;
       }
       return null;
@@ -139,10 +151,6 @@ export function useCorporateObligationSync({
     [client1EntityId, client1Name, client2EntityId, client2Name]
   );
 
-  /**
-   * Resolve a non-client person by name. This is for "other" persons who
-   * don't have a pre-assigned stable ID. Uses PeopleRepository + Entity Registry.
-   */
   const resolveOtherPersonEntity = useCallback(
     async (name: string): Promise<{ entityId: string; displayName: string } | null> => {
       if (!name.trim()) return null;
@@ -158,27 +166,31 @@ export function useCorporateObligationSync({
     [peopleRepo, store]
   );
 
-  /**
-   * Unified person resolver: uses stable IDs for client1/client2, name-based
-   * for other persons. Also handles "both" by returning client1 (the caller
-   * expands "both" into client1 + client2 separately).
-   */
   const resolvePersonEntity = useCallback(
     async (label: string): Promise<{ entityId: string; displayName: string } | null> => {
-      // Client1 / Client2 — ID-authoritative
       const clientResult = resolveClientEntity(label);
       if (clientResult) return clientResult;
       if (label === 'client1' || label === 'client2') return null;
-      // Other person — name-based
       return resolveOtherPersonEntity(label);
     },
     [resolveClientEntity, resolveOtherPersonEntity]
   );
 
+  const sourceSignature = useMemo(() => {
+    return normalizeObligationSource([shareholderLoans, companyOwed, intercompanyLoans, relatedPartyLoans, personalGuarantees, corporations]);
+  }, [shareholderLoans, companyOwed, intercompanyLoans, relatedPartyLoans, personalGuarantees, corporations]);
+
   useEffect(() => {
+    if (!enabledRef.current) return;
     genRef.current++;
     const syncGen = genRef.current;
     const syncAll = async () => {
+      const shareholderLoans = shareholderLoansRef.current;
+      const companyOwed = companyOwedRef.current;
+      const intercompanyLoans = intercompanyLoansRef.current;
+      const relatedPartyLoans = relatedPartyLoansRef.current;
+      const personalGuarantees = personalGuaranteesRef.current;
+
       // ── Shareholder Loans (Corporation owes Person) ──
       for (let i = 0; i < shareholderLoans.length; i++) {
         const sl = shareholderLoans[i];
@@ -213,7 +225,7 @@ export function useCorporateObligationSync({
 
         await syncObligation(input, store, (id) => {
           if (syncGen !== genRef.current) return;
-          updateEntry('shareholderLoansData', i, { obligationEntityId: id, borrowerEntityId: corpResult.entity.id, lenderEntityId: personInfo.entityId }, shareholderLoans);
+          updateEntry('shareholderLoansData', i, { obligationEntityId: id, borrowerEntityId: corpResult.entity.id, lenderEntityId: personInfo.entityId }, shareholderLoansRef.current);
         });
       }
 
@@ -251,11 +263,11 @@ export function useCorporateObligationSync({
 
         await syncObligation(input, store, (id) => {
           if (syncGen !== genRef.current) return;
-          updateEntry('companyOwedData', i, { obligationEntityId: id, borrowerEntityId: personInfo.entityId, lenderEntityId: corpResult.entity.id }, companyOwed);
+          updateEntry('companyOwedData', i, { obligationEntityId: id, borrowerEntityId: personInfo.entityId, lenderEntityId: corpResult.entity.id }, companyOwedRef.current);
         });
       }
 
-      // ── Intercompany Loans (Corporation owes Corporation) ──
+      // ── Intercompany Loans ──
       for (let i = 0; i < intercompanyLoans.length; i++) {
         const ic = intercompanyLoans[i];
         if (!ic?.lenderCompany?.trim() || !ic?.borrowerCompany?.trim()) continue;
@@ -291,7 +303,7 @@ export function useCorporateObligationSync({
 
         await syncObligation(input, store, (id) => {
           if (syncGen !== genRef.current) return;
-          updateEntry('intercompanyLoansData', i, { obligationEntityId: id, lenderEntityId: lenderResult.entity.id, borrowerEntityId: borrowerResult.entity.id }, intercompanyLoans);
+          updateEntry('intercompanyLoansData', i, { obligationEntityId: id, lenderEntityId: lenderResult.entity.id, borrowerEntityId: borrowerResult.entity.id }, intercompanyLoansRef.current);
         });
       }
 
@@ -362,16 +374,11 @@ export function useCorporateObligationSync({
 
         await syncObligation(input, store, (id) => {
           if (syncGen !== genRef.current) return;
-          updateEntry('relatedPartyLoansData', i, { obligationEntityId: id, borrowerEntityId: borrowerInfo!.entityId, lenderEntityId: lenderInfo!.entityId }, relatedPartyLoans);
+          updateEntry('relatedPartyLoansData', i, { obligationEntityId: id, borrowerEntityId: borrowerInfo!.entityId, lenderEntityId: lenderInfo!.entityId }, relatedPartyLoansRef.current);
         });
       }
 
       // ── Personal / Corporate Guarantees ──
-      // Guarantees attach guarantors to a specific underlying Obligation.
-      // The user selects which borrowing is guaranteed via obligationSelection:
-      //   - 'existing_obligation': uses the exact selectedObligationId
-      //   - 'another_borrowing': creates one new underlying obligation
-      //   - 'not_sure': preserves guarantee info, flags for confirmation
       for (let i = 0; i < personalGuarantees.length; i++) {
         const pg = personalGuarantees[i];
         if (!pg?.selectedCompany?.trim()) continue;
@@ -381,7 +388,6 @@ export function useCorporateObligationSync({
           completionStatus: 'identified',
         });
 
-        // Resolve guarantors — support person and corporate guarantors
         const guarantors: ObligationInput['guarantors'] = [];
         const guarantorLabels = pg.guarantors || [];
 
@@ -420,23 +426,21 @@ export function useCorporateObligationSync({
         const obligationSelection = pg.obligationSelection || '';
         const selectedObligationId = pg.selectedObligationId || '';
 
-        // ── "I'm not sure" — preserve without guessing ──
         if (obligationSelection === 'not_sure') {
+          if (syncGen !== genRef.current) return;
           updateEntry('personalGuaranteesData', i, {
             guarantorEntityIds: guarantors.map((g) => g.entityId),
             guaranteeLinkRequiresConfirmation: true,
             obligationEntityId: undefined,
-          }, personalGuarantees);
+          }, personalGuaranteesRef.current);
           continue;
         }
 
-        // ── "Existing obligation" — use exact obligationEntityId ──
         if (obligationSelection === 'existing_obligation' && selectedObligationId) {
-          // Attach guarantors to the selected obligation
-          const existingObligation = registry.entities.find(
-            (e) => e.id === selectedObligationId && e.active && e.entityType === 'obligation'
-          );
-          if (!existingObligation) continue;
+          // Use store.getEntityById instead of registry.entities to avoid
+          // depending on the entities collection (self-feedback loop).
+          const existingObligation = store.getEntityById(selectedObligationId);
+          if (!existingObligation || existingObligation.entityType !== 'obligation') continue;
 
           const meta = (existingObligation.metadata || {}) as Record<string, unknown>;
           const existingBorrowerId = meta.borrowerEntityId as string;
@@ -444,12 +448,12 @@ export function useCorporateObligationSync({
 
           const input: ObligationInput = {
             obligationEntityId: selectedObligationId,
-            obligationType: (existingObligation.metadata as Record<string, unknown>).obligationType as ObligationType || 'other_liability',
+            obligationType: meta.obligationType as ObligationType || 'other_liability',
             direction: 'other',
             borrower: { entityId: existingBorrowerId, entityType: 'corporation', displayName: corpResult.entity.displayName },
             borrowers: [{ entityId: existingBorrowerId, entityType: 'corporation' as const, displayName: corpResult.entity.displayName }],
             lender: { entityId: existingLenderId, entityType: 'lender', displayName: '' },
-            amount: (existingObligation.metadata as Record<string, unknown>).amount as string || '',
+            amount: meta.amount as string || '',
             amountUnknown: false,
             secured: 'no',
             guarantors,
@@ -467,12 +471,11 @@ export function useCorporateObligationSync({
               lenderEntityId: existingLenderId,
               guarantorEntityIds: guarantors.map((g) => g.entityId),
               guaranteeLinkRequiresConfirmation: false,
-            }, personalGuarantees);
+            }, personalGuaranteesRef.current);
           });
           continue;
         }
 
-        // ── "Another borrowing not listed" — create one new obligation ──
         if (obligationSelection === 'another_borrowing' || !obligationSelection) {
           let lenderEntityId: string | undefined;
           let lenderDisplayName = '';
@@ -487,10 +490,11 @@ export function useCorporateObligationSync({
           }
 
           if (!lenderEntityId) {
+            if (syncGen !== genRef.current) return;
             updateEntry('personalGuaranteesData', i, {
               guarantorEntityIds: guarantors.map((g) => g.entityId),
               guaranteeLinkRequiresConfirmation: true,
-            }, personalGuarantees);
+            }, personalGuaranteesRef.current);
             continue;
           }
 
@@ -516,13 +520,14 @@ export function useCorporateObligationSync({
           };
 
           await syncObligation(input, store, (id) => {
+            if (syncGen !== genRef.current) return;
             updateEntry('personalGuaranteesData', i, {
               obligationEntityId: id,
               borrowerEntityId: corpResult.entity.id,
               lenderEntityId,
               guarantorEntityIds: guarantors.map((g) => g.entityId),
               guaranteeLinkRequiresConfirmation: false,
-            }, personalGuarantees);
+            }, personalGuaranteesRef.current);
           });
           continue;
         }
@@ -530,7 +535,8 @@ export function useCorporateObligationSync({
     };
 
     syncAll();
-  }, [shareholderLoans, companyOwed, intercompanyLoans, relatedPartyLoans, personalGuarantees, client1Name, client2Name, client1EntityId, client2EntityId, hasSpouse, corporations, store, resolveClientEntity, resolveOtherPersonEntity, resolvePersonEntity, updateEntry]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sourceSignature, store, resolveClientEntity, resolveOtherPersonEntity, resolvePersonEntity, updateEntry]);
 
   const removeObligation = useCallback(
     async (obligationEntityId: string | undefined) => {

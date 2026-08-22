@@ -88,6 +88,7 @@ export type ObligationStore = {
   getRelationshipsByTarget: (entityId: string, relationshipType?: RelationshipType) => EntityRelationship[];
   getRelationshipsBySource: (entityId: string, relationshipType?: RelationshipType) => EntityRelationship[];
   getRelationshipsByEntity: (entityId: string) => EntityRelationship[];
+  getEntityById: (entityId: string) => EntityEntry | undefined;
 };
 
 function buildObligationName(input: ObligationInput): string {
@@ -96,6 +97,114 @@ function buildObligationName(input: ObligationInput): string {
   const borrowerNames = allBorrowers.map((b) => b.displayName || 'Borrower').join(' & ');
   return `${lenderPart} — ${borrowerNames}`;
 }
+
+// ── Pure helpers for idempotent synchronization ──────────────────────────
+
+/**
+ * Build the desired metadata object from an ObligationInput.
+ * This is the canonical shape that syncObligation wants the entity to have.
+ */
+export function buildDesiredMetadata(input: ObligationInput): Record<string, unknown> {
+  const allBorrowers = input.borrowers && input.borrowers.length > 0 ? input.borrowers : [input.borrower];
+  return {
+    obligationType: input.obligationType,
+    direction: input.direction,
+    amount: input.amount,
+    amountUnknown: input.amountUnknown,
+    interestRate: input.interestRate,
+    secured: input.secured,
+    collateralDescription: input.collateralDescription,
+    collateralEntityId: input.collateralEntityId,
+    borrowerEntityId: input.borrower.entityId,
+    borrowerEntityIds: allBorrowers.map((b) => b.entityId),
+    borrowers: allBorrowers.map((b) => ({ entityId: b.entityId, entityType: b.entityType, displayName: b.displayName })),
+    lenderEntityId: input.lender.entityId,
+    guarantors: input.guarantors.map((g) => ({ entityId: g.entityId, entityType: g.entityType, displayName: g.displayName })),
+    documentLocationLabel: input.documentLocationLabel,
+    documentLocationId: input.documentLocationId,
+    notes: input.notes,
+    sourceRecordId: input.sourceRecordId,
+    paymentAmount: input.paymentAmount,
+    paymentFrequency: input.paymentFrequency,
+    paymentSourceBankRef: input.paymentSourceBankRef,
+    creditLimit: input.creditLimit,
+  };
+}
+
+/**
+ * Fields that syncObligation owns and should compare for idempotency.
+ * Excludes irrelevant fields like updatedAt, createdAt, normalizedName.
+ */
+const COMPARED_FIELDS = [
+  'obligationType', 'direction', 'amount', 'amountUnknown', 'interestRate',
+  'secured', 'collateralDescription', 'collateralEntityId',
+  'borrowerEntityId', 'borrowerEntityIds', 'lenderEntityId',
+  'documentLocationLabel', 'documentLocationId', 'notes',
+  'sourceRecordId', 'paymentAmount', 'paymentFrequency',
+  'paymentSourceBankRef', 'creditLimit',
+] as const;
+
+/**
+ * Compare current canonical obligation metadata with desired metadata.
+ * Returns true if they are equivalent (no write needed).
+ * Only compares fields owned by sync — ignores updatedAt, etc.
+ */
+export function canonicalObligationEquivalent(
+  current: Record<string, unknown> | undefined,
+  desired: Record<string, unknown>
+): boolean {
+  if (!current) return false;
+  for (const field of COMPARED_FIELDS) {
+    const curVal = current[field];
+    const desVal = desired[field];
+    if (Array.isArray(desVal)) {
+      const curArr = Array.isArray(curVal) ? curVal : [];
+      if (desVal.length !== curArr.length) return false;
+      for (let i = 0; i < desVal.length; i++) {
+        if (JSON.stringify(desVal[i]) !== JSON.stringify(curArr[i])) return false;
+      }
+    } else if (JSON.stringify(curVal) !== JSON.stringify(desVal)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Determine whether synchronization should run for a domain.
+ * Pure function — tests can verify scoping logic without React.
+ */
+export function shouldSynchronizeDomain(enabled: boolean): boolean {
+  return enabled;
+}
+
+/**
+ * Merge only the canonical linkage field (obligationEntityId) into a source
+ * record without touching user-entered fields. Returns a new object with
+ * only the linkage merged, or the original if no merge needed.
+ */
+export function mergeCanonicalLinkageIntoCurrentDebt<
+  T extends Record<string, unknown>
+>(current: T, obligationEntityId: string): T {
+  if (current.obligationEntityId === obligationEntityId) return current;
+  return { ...current, obligationEntityId };
+}
+
+/**
+ * Compute a stable source signature for a set of source records.
+ * Used as an effect dependency to detect actual content changes
+ * without being affected by object identity churn.
+ */
+export function normalizeObligationSource(data: unknown): string {
+  if (!data) return '';
+  try {
+    return JSON.stringify(data);
+  } catch {
+    return '';
+  }
+}
+
+// ── Core sync function ───────────────────────────────────────────────────
 
 export async function syncObligation(
   input: ObligationInput,
@@ -128,31 +237,14 @@ export async function syncObligation(
 
   if (!obligationId) return undefined;
 
-  await store.updateEntity(obligationId, {
-    metadata: {
-      obligationType: input.obligationType,
-      direction: input.direction,
-      amount: input.amount,
-      amountUnknown: input.amountUnknown,
-      interestRate: input.interestRate,
-      secured: input.secured,
-      collateralDescription: input.collateralDescription,
-      collateralEntityId: input.collateralEntityId,
-      borrowerEntityId: input.borrower.entityId,
-      borrowerEntityIds: allBorrowers.map((b) => b.entityId),
-      borrowers: allBorrowers.map((b) => ({ entityId: b.entityId, entityType: b.entityType, displayName: b.displayName })),
-      lenderEntityId: input.lender.entityId,
-      guarantors: input.guarantors.map((g) => ({ entityId: g.entityId, entityType: g.entityType, displayName: g.displayName })),
-      documentLocationLabel: input.documentLocationLabel,
-      documentLocationId: input.documentLocationId,
-      notes: input.notes,
-      sourceRecordId: input.sourceRecordId,
-      paymentAmount: input.paymentAmount,
-      paymentFrequency: input.paymentFrequency,
-      paymentSourceBankRef: input.paymentSourceBankRef,
-      creditLimit: input.creditLimit,
-    },
-  });
+  // Idempotency check: compare current canonical metadata with desired
+  const desiredMeta = buildDesiredMetadata(input);
+  const existingEntity = store.getEntityById(obligationId);
+  const currentMeta = (existingEntity?.metadata || {}) as Record<string, unknown>;
+
+  if (!canonicalObligationEquivalent(currentMeta, desiredMeta)) {
+    await store.updateEntity(obligationId, { metadata: desiredMeta });
+  }
 
   await syncBorrowerRelationships(obligationId, allBorrowers, input, store);
   await syncLenderRelationship(obligationId, input, store);

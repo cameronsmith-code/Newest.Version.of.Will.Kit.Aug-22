@@ -140,6 +140,7 @@ export default function StepForm({
   }, [step.sectionId, answers['spouseName'], client2PersonId, client2EntityId]);
 
   const { removeObligation: removeCorporateObligation } = useCorporateObligationSync({
+    enabled: step.sectionId === 'corporateFinancialConnections',
     shareholderLoans: shareholderLoansData,
     companyOwed: companyOwedData,
     intercompanyLoans: intercompanyLoansData,
@@ -160,6 +161,7 @@ export default function StepForm({
   const debtAnswers = allAnswers?.get('debtObligations') || {};
   const additionalDebtsData = (debtAnswers['additionalDebtsData'] as Array<Record<string, unknown>>) || [];
   usePersonalObligationSync({
+    enabled: step.sectionId === 'debtObligations',
     additionalDebts: additionalDebtsData as Array<{ id: string; borrower?: string; borrowerOtherName?: string; description?: string; lender?: string; amount?: string; amountUnknown?: string; interestRate?: string; interestRateUnknown?: string; paymentAmount?: string; paymentFrequency?: string; paymentFrequencyOther?: string; paymentSource?: string; paymentSourceOther?: string; paymentSourceBankRef?: string; isSecured?: string; securedByType?: string; securedByOther?: string; hasDocument?: string; documentLocation?: string; documentLocationOther?: string; specialNotes?: string; obligationEntityId?: string; borrowerEntityId?: string; lenderEntityId?: string }>,
     client1Name: syncClient1Name,
     client2Name: syncClient2Name,
@@ -174,6 +176,7 @@ export default function StepForm({
   const primaryHomeData = (realEstateAnswers['primaryHomeData'] as Record<string, unknown>) || {};
   const propertiesData = (realEstateAnswers['propertiesData'] as Array<Record<string, unknown>>) || [];
   useRealEstateObligationSync({
+    enabled: step.sectionId === 'realEstate',
     primaryHomeData: primaryHomeData as { name?: string; propertyEntityId?: string; hasDebt?: string; debtType?: string; mortgageLender?: string; mortgageBalance?: string; mortgageResponsibleParties?: string[]; mortgageOtherBorrowers?: Array<{ name?: string }>; mortgageInterestRate?: string; mortgagePayment?: string; mortgagePaymentFrequency?: string; mortgageSpecialNotes?: string; mortgageEntityId?: string; helocLender?: string; helocBalance?: string; helocCreditLimit?: string; helocResponsibleParties?: string[]; helocOtherBorrowers?: Array<{ name?: string }>; helocInterestRate?: string; helocSpecialNotes?: string; helocEntityId?: string },
     propertiesData: propertiesData as Array<{ name?: string; propertyEntityId?: string; hasDebt?: string; debtType?: string; mortgageLender?: string; mortgageBalance?: string; mortgageResponsibleParties?: string[]; mortgageOtherBorrowers?: Array<{ name?: string }>; mortgageInterestRate?: string; mortgagePayment?: string; mortgagePaymentFrequency?: string; mortgageSpecialNotes?: string; mortgageEntityId?: string; helocLender?: string; helocBalance?: string; helocCreditLimit?: string; helocResponsibleParties?: string[]; helocOtherBorrowers?: Array<{ name?: string }>; helocInterestRate?: string; helocSpecialNotes?: string; helocEntityId?: string }>,
     client1Name: syncClient1Name,
@@ -782,11 +785,11 @@ export default function StepForm({
     }
   }, [answers['client2HasPreviousRelationship']]);
 
+  // Legacy flat trust keys are cleared when the gateway is not 'yes', but
+  // familyTrustsData (the canonical structured records) is preserved per
+  // FACTS PERSIST. OUTPUTS DERIVE.
   useEffect(() => {
     if (answers['hasFamilyTrust'] !== 'yes') {
-      if (answers['familyTrustsData'] !== undefined) {
-        onAnswerChange('familyTrustsData', undefined);
-      }
       const legacyKeys = [
         'trustLegalName', 'trustDeedLocation', 'trustYearEstablished',
         'trustBeneficiariesData', 'hasAdditionalFamilyTrust',
@@ -6102,7 +6105,7 @@ export default function StepForm({
                   onChange={(value) => {
                     onAnswerChange(gateQuestion.key, value);
                     if (value !== 'yes') {
-                      onAnswerChange('personalGuaranteesData', undefined);
+                      // Structured data preserved per FACTS PERSIST — gateway controls visibility, not deletion
                     }
                   }}
                 />
@@ -6256,7 +6259,7 @@ export default function StepForm({
                         onChange={(value) => {
                           onAnswerChange('slHasShareholderLoan', value);
                           if (value !== 'yes') {
-                            onAnswerChange('shareholderLoansData', undefined);
+                          // Structured data preserved per FACTS PERSIST
                           }
                         }}
                       />
@@ -6397,7 +6400,7 @@ export default function StepForm({
                         onChange={(value) => {
                           onAnswerChange('slOwesCompany', value);
                           if (value !== 'yes') {
-                            onAnswerChange('companyOwedData', undefined);
+                          // Structured data preserved per FACTS PERSIST
                           }
                         }}
                       />
@@ -6538,7 +6541,7 @@ export default function StepForm({
                         onChange={(value) => {
                           onAnswerChange('slIntercompanyLoan', value);
                           if (value !== 'yes') {
-                            onAnswerChange('intercompanyLoansData', undefined);
+                          // Structured data preserved per FACTS PERSIST
                           }
                         }}
                       />
@@ -6676,7 +6679,7 @@ export default function StepForm({
                         onChange={(value) => {
                           onAnswerChange('slRelatedPartyLoan', value);
                           if (value !== 'yes') {
-                            onAnswerChange('relatedPartyLoansData', undefined);
+                          // Structured data preserved per FACTS PERSIST
                           }
                         }}
                       />

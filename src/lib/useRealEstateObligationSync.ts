@@ -3,19 +3,19 @@
  * from the Real Estate section and syncs mortgages/HELOCs to the unified
  * Obligation architecture.
  *
- * Each mortgage or HELOC creates/reuses one canonical Obligation entity with:
- * - borrower_of relationships for each responsible party
- * - lender_of relationship for the lender
- * - secured_by relationship to the property entity (using propertyEntityId)
- *
- * For HELOCs, creditLimit and outstanding balance are both stored.
- * Household debt totals use the outstanding balance, not the credit limit.
+ * Closure Gate fixes:
+ * - `enabled` parameter: hook stays mounted but performs no work when disabled.
+ * - Stable callback refs: onUpdateField/onUpdateProperty are stored in refs so
+ *   their identity churn from StepForm re-renders does not retrigger sync.
+ * - Source-signature-driven effect: the sync effect depends on a JSON signature
+ *   of the source data, not on callback identity or registry.collections.
+ * - getEntityById added to store for idempotent comparison in syncObligation.
  */
 
 import { useEffect, useCallback, useRef, useMemo } from 'react';
 import { useEntityRegistry } from '../context/EntityRegistryContext';
 import { usePeopleRepository } from '../context/PeopleRepositoryContext';
-import { syncObligation, deleteObligation, type ObligationInput, type ObligationStore } from './obligationSync';
+import { syncObligation, deleteObligation, normalizeObligationSource, type ObligationInput, type ObligationStore } from './obligationSync';
 
 type PropertyData = {
   name?: string;
@@ -46,6 +46,7 @@ type PropertyData = {
 };
 
 type RealEstateObligationSyncArgs = {
+  enabled: boolean;
   primaryHomeData: PropertyData;
   propertiesData: PropertyData[];
   client1Name: string;
@@ -58,6 +59,7 @@ type RealEstateObligationSyncArgs = {
 };
 
 export function useRealEstateObligationSync({
+  enabled,
   primaryHomeData,
   propertiesData,
   client1Name,
@@ -72,6 +74,22 @@ export function useRealEstateObligationSync({
   const peopleRepo = usePeopleRepository();
 
   const genRef = useRef(0);
+  const enabledRef = useRef(enabled);
+  enabledRef.current = enabled;
+
+  // Stable refs for callbacks — their identity changes every StepForm render
+  // but we don't want that to retrigger sync.
+  const onUpdateFieldRef = useRef(onUpdateField);
+  onUpdateFieldRef.current = onUpdateField;
+  const onUpdatePropertyRef = useRef(onUpdateProperty);
+  onUpdatePropertyRef.current = onUpdateProperty;
+
+  // Stable refs for source data — used inside syncPropertyDebt to avoid
+  // stale closures without depending on object identity in the effect.
+  const primaryHomeDataRef = useRef(primaryHomeData);
+  primaryHomeDataRef.current = primaryHomeData;
+  const propertiesDataRef = useRef(propertiesData);
+  propertiesDataRef.current = propertiesData;
 
   const store: ObligationStore = useMemo(() => ({
     getOrCreateEntity: registry.getOrCreateEntity,
@@ -81,6 +99,7 @@ export function useRealEstateObligationSync({
     getRelationshipsByTarget: registry.getRelationshipsByTarget,
     getRelationshipsBySource: registry.getRelationshipsBySource,
     getRelationshipsByEntity: registry.getRelationshipsByEntity,
+    getEntityById: registry.getEntityById,
   }), [
     registry.getOrCreateEntity,
     registry.updateEntity,
@@ -89,6 +108,7 @@ export function useRealEstateObligationSync({
     registry.getRelationshipsByTarget,
     registry.getRelationshipsBySource,
     registry.getRelationshipsByEntity,
+    registry.getEntityById,
   ]);
 
   const resolveClientEntity = useCallback(
@@ -181,17 +201,17 @@ export function useRealEstateObligationSync({
         await syncObligation(input, store, (id) => {
           if (syncGen !== genRef.current) return;
           if (isPrimary) {
-            if (primaryHomeData.mortgageEntityId !== id) {
-              onUpdateField('mortgageEntityId', id);
+            const current = primaryHomeDataRef.current;
+            if (current.mortgageEntityId !== id) {
+              onUpdateFieldRef.current('mortgageEntityId', id);
             }
           } else {
-            if (propertiesData[index]?.mortgageEntityId !== id) {
-              onUpdateProperty(index, { mortgageEntityId: id });
+            const currentProps = propertiesDataRef.current;
+            if (currentProps[index]?.mortgageEntityId !== id) {
+              onUpdatePropertyRef.current(index, { mortgageEntityId: id });
             }
           }
         });
-
-
       }
 
       // Sync HELOC
@@ -247,35 +267,44 @@ export function useRealEstateObligationSync({
         await syncObligation(input, store, (id) => {
           if (syncGen !== genRef.current) return;
           if (isPrimary) {
-            if (primaryHomeData.helocEntityId !== id) {
-              onUpdateField('helocEntityId', id);
+            const current = primaryHomeDataRef.current;
+            if (current.helocEntityId !== id) {
+              onUpdateFieldRef.current('helocEntityId', id);
             }
           } else {
-            if (propertiesData[index]?.helocEntityId !== id) {
-              onUpdateProperty(index, { helocEntityId: id });
+            const currentProps = propertiesDataRef.current;
+            if (currentProps[index]?.helocEntityId !== id) {
+              onUpdatePropertyRef.current(index, { helocEntityId: id });
             }
           }
         });
-
-
       }
     },
-    [store, resolveClientEntity, resolveOtherPersonEntity, onUpdateField, onUpdateProperty, primaryHomeData, propertiesData]
+    [store, resolveClientEntity, resolveOtherPersonEntity]
   );
 
+  // Source-signature-driven effect: only re-runs when actual source content
+  // changes (normalized JSON), not when callback identities or registry
+  // collections change.
+  const sourceSignature = useMemo(() => {
+    return normalizeObligationSource([primaryHomeData, propertiesData]);
+  }, [primaryHomeData, propertiesData]);
+
   useEffect(() => {
+    if (!enabledRef.current) return;
     genRef.current++;
     const syncGen = genRef.current;
     const syncAll = async () => {
-      await syncPropertyDebt(primaryHomeData, true, 0);
+      await syncPropertyDebt(primaryHomeDataRef.current, true, 0);
       if (syncGen !== genRef.current) return;
-      for (let i = 0; i < propertiesData.length; i++) {
+      for (let i = 0; i < propertiesDataRef.current.length; i++) {
         if (syncGen !== genRef.current) return;
-        await syncPropertyDebt(propertiesData[i], false, i);
+        await syncPropertyDebt(propertiesDataRef.current[i], false, i);
       }
     };
     syncAll();
-  }, [primaryHomeData, propertiesData, syncPropertyDebt]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sourceSignature, syncPropertyDebt]);
 
   const removeObligation = useCallback(
     async (obligationEntityId: string | undefined) => {

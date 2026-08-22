@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite';
+import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 import { copyFileSync, readdirSync, statSync, mkdirSync } from 'fs';
 import { join } from 'path';
@@ -39,4 +39,8 @@ export default defineConfig({
     exclude: ['lucide-react'],
   },
   publicDir: false,
+  test: {
+    environment: 'jsdom',
+    globals: true,
+  },
 });

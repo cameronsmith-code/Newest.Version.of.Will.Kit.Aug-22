@@ -3,15 +3,18 @@
  * Debt & Obligations section and syncs each entry to the unified Obligation
  * architecture via syncObligation.
  *
- * Each additional personal debt creates/reuses one canonical Obligation entity
- * with borrower_of / lender_of relationships. The obligationEntityId is written
- * back to the source array entry for stable identity across edits.
+ * Closure Gate fixes:
+ * - `enabled` parameter: hook stays mounted but performs no work when disabled.
+ * - Stable callback refs: onUpdateArray is stored in a ref so its identity
+ *   churn from StepForm re-renders does not retrigger sync.
+ * - Source-signature-driven effect.
+ * - getEntityById added to store for idempotent comparison.
  */
 
 import { useEffect, useCallback, useMemo, useRef } from 'react';
 import { useEntityRegistry } from '../context/EntityRegistryContext';
 import { usePeopleRepository } from '../context/PeopleRepositoryContext';
-import { syncObligation, deleteObligation, type ObligationInput, type ObligationStore, type ObligationType } from './obligationSync';
+import { syncObligation, deleteObligation, normalizeObligationSource, type ObligationInput, type ObligationStore, type ObligationType } from './obligationSync';
 
 type AdditionalDebt = {
   id: string;
@@ -45,6 +48,7 @@ type AdditionalDebt = {
 };
 
 type PersonalObligationSyncArgs = {
+  enabled: boolean;
   additionalDebts: AdditionalDebt[];
   client1Name: string;
   client2Name: string;
@@ -66,6 +70,7 @@ function resolveDebtType(debt: AdditionalDebt): ObligationType {
 }
 
 export function usePersonalObligationSync({
+  enabled,
   additionalDebts,
   client1Name,
   client2Name,
@@ -85,6 +90,7 @@ export function usePersonalObligationSync({
     getRelationshipsByTarget: registry.getRelationshipsByTarget,
     getRelationshipsBySource: registry.getRelationshipsBySource,
     getRelationshipsByEntity: registry.getRelationshipsByEntity,
+    getEntityById: registry.getEntityById,
   }), [
     registry.getOrCreateEntity,
     registry.updateEntity,
@@ -93,18 +99,29 @@ export function usePersonalObligationSync({
     registry.getRelationshipsByTarget,
     registry.getRelationshipsBySource,
     registry.getRelationshipsByEntity,
+    registry.getEntityById,
   ]);
   const genRef = useRef(0);
+  const enabledRef = useRef(enabled);
+  enabledRef.current = enabled;
+
+  // Stable ref for callback
+  const onUpdateArrayRef = useRef(onUpdateArray);
+  onUpdateArrayRef.current = onUpdateArray;
+
+  // Stable ref for source data
+  const additionalDebtsRef = useRef(additionalDebts);
+  additionalDebtsRef.current = additionalDebts;
 
   const updateEntry = useCallback(
     (index: number, updates: Record<string, unknown>, current: AdditionalDebt[]) => {
       const updated = [...current];
       if (updated[index]) {
         updated[index] = { ...updated[index], ...updates };
-        onUpdateArray('additionalDebtsData', updated);
+        onUpdateArrayRef.current('additionalDebtsData', updated);
       }
     },
-    [onUpdateArray]
+    []
   );
 
   const resolveClientEntity = useCallback(
@@ -130,15 +147,20 @@ export function usePersonalObligationSync({
     [peopleRepo, store]
   );
 
+  const sourceSignature = useMemo(() => {
+    return normalizeObligationSource(additionalDebts);
+  }, [additionalDebts]);
+
   useEffect(() => {
+    if (!enabledRef.current) return;
     genRef.current++;
     const syncGen = genRef.current;
     const syncAll = async () => {
-      for (let i = 0; i < additionalDebts.length; i++) {
-        const debt = additionalDebts[i];
+      const debts = additionalDebtsRef.current;
+      for (let i = 0; i < debts.length; i++) {
+        const debt = debts[i];
         if (!debt?.id) continue;
 
-        // Resolve borrower set — supports joint (multiple borrowers on one obligation)
         const borrowerLabel = debt.borrower || 'client1';
         const borrowers: Array<{ entityId: string; entityType: 'person'; displayName: string }> = [];
 
@@ -158,7 +180,6 @@ export function usePersonalObligationSync({
         if (borrowers.length === 0) continue;
         const borrowerInfo = borrowers[0];
 
-        // Resolve lender
         const lenderName = debt.lender?.trim() || 'Unknown Lender';
         const lenderResult = await store.getOrCreateEntity(lenderName, 'lender', {
           sourceSection: 'debtObligations',
@@ -168,11 +189,7 @@ export function usePersonalObligationSync({
         const obligationType = resolveDebtType(debt);
         const isSecured = debt.isSecured === 'yes';
 
-        // Build guarantors (joint = co-borrower, not guarantor)
         const guarantors: ObligationInput['guarantors'] = [];
-
-        // For joint borrowers, add client2 as co-borrower via a second borrower_of relationship
-        // syncObligation only supports one borrower, so we add client2 as a relationship after sync
 
         const input: ObligationInput = {
           obligationEntityId: debt.obligationEntityId,
@@ -200,20 +217,18 @@ export function usePersonalObligationSync({
 
         await syncObligation(input, store, (id) => {
           if (syncGen !== genRef.current) return;
-          const updates: Record<string, unknown> = {
+          updateEntry(i, {
             obligationEntityId: id,
             borrowerEntityId: borrowerInfo!.entityId,
             lenderEntityId: lenderResult.entity.id,
-          };
-          updateEntry(i, updates, additionalDebts);
+          }, additionalDebtsRef.current);
         });
-
-
       }
     };
 
     syncAll();
-  }, [additionalDebts, client1Name, client2Name, client1EntityId, client2EntityId, hasSpouse, store, resolveClientEntity, resolveOtherPersonEntity, updateEntry]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sourceSignature, store, resolveClientEntity, resolveOtherPersonEntity, updateEntry]);
 
   const removeObligation = useCallback(
     async (obligationEntityId: string | undefined) => {
